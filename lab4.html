@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Алгоритмы растеризации</title>
+<style>
+:root{--accent:#2c5282;--muted:#718096;--bg:#f5f5f5;--panel:#ffffff;}
+*{box-sizing:border-box}
+body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:#222;padding:20px;margin:0}
+.container{max-width:1200px;margin:0 auto}
+header{background:var(--accent);color:#fff;padding:20px;border-radius:10px;margin-bottom:18px}
+h1{margin:0;font-size:1.6rem}
+.main{display:flex;gap:20px;flex-wrap:wrap}
+.panel{background:var(--panel);padding:18px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.06);border:1px solid #e6eef8}
+.controls{flex:1;min-width:300px}
+.canvas-wrap{flex:2;min-width:520px}
+.section-title{color:var(--accent);font-weight:700;margin-bottom:10px}
+.alg-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
+.btn{padding:10px;border-radius:8px;border:2px solid #d3e6ff;background:#eaf6ff;color:var(--accent);cursor:pointer;font-weight:600}
+.btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.small{font-size:0.9rem}
+.input-block{margin-bottom:10px}
+.input-block label{display:block;margin-bottom:4px;font-size:0.9rem;color:#2c5282;font-weight:700}
+.input-row{display:flex;gap:10px}
+.input-row input{flex:1;padding:8px;border-radius:6px;border:2px solid #e2edf8}
+.actions{display:flex;gap:10px;margin-top:10px}
+.action-btn{flex:1;padding:10px;border-radius:8px;border:none;cursor:pointer;font-weight:700;color:#fff}
+.action-btn.primary{background:var(--accent)}
+.action-btn.clear{background:#e53e3e}
+.info{color:var(--muted);font-size:0.9rem;margin-top:12px}
+#canvas-container{background:#fff;border-radius:8px;border:1px solid #cbd5e0;padding:8px}
+canvas{display:block;background:#ffffff}
+.footer-note{margin-top:12px;color:var(--muted);font-size:0.85rem}
+@media (max-width:900px){.main{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="container">
+<header><h1>Алгоритмы растеризации</h1></header>
+
+<div class="main">
+<div class="panel controls">
+<div class="section-title">Управление</div>
+
+<div class="alg-list" id="alg-list">
+<button class="btn active" data-alg="step">Пошаговый</button>
+<button class="btn" data-alg="dda">ЦДА</button>
+<button class="btn" data-alg="bresenham-line">Брезенхем (линия)</button>
+<button class="btn" data-alg="bresenham-circle">Брезенхем (окружность)</button>
+<button class="btn" data-alg="castle-pitway">Кастла‑Питвея</button>
+<button class="btn" data-alg="wu">Ву</button>
+</div>
+
+<div style="margin-bottom:10px">
+<div class="small" style="margin-bottom:6px">Сглаживание:</div>
+<button id="smoothing-toggle" class="btn">OFF</button>
+</div>
+
+<div class="input-block">
+<label>Начальная точка (x1, y1):</label>
+<div class="input-row">
+<input id="x1" type="number" value="0" />
+<input id="y1" type="number" value="0" />
+</div>
+</div>
+
+<div class="input-block">
+<label>Конечная точка (x2, y2):</label>
+<div class="input-row">
+<input id="x2" type="number" value="300" />
+<input id="y2" type="number" value="200" />
+</div>
+</div>
+
+<div class="input-block" id="radius-row" style="display:none">
+<label>Радиус окружности:</label>
+<input id="radius" type="number" value="80" />
+</div>
+
+<div class="actions">
+<button id="draw-btn" class="action-btn primary">Нарисовать</button>
+<button id="clear-btn" class="action-btn clear">Очистить</button>
+</div>
+
+</div>
+
+<div class="panel canvas-wrap">
+<div class="section-title">Визуализация</div>
+<div id="canvas-container">
+<canvas id="c" width="900" height="560"></canvas>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const centerX = canvas.width/2;
+const centerY = canvas.height/2;
+const gridSize = 20;
+const pixel = 4;
+
+const algButtons = document.querySelectorAll('#alg-list .btn');
+const smoothingToggle = document.getElementById('smoothing-toggle');
+const drawBtn = document.getElementById('draw-btn');
+const clearBtn = document.getElementById('clear-btn');
+
+const x1in = document.getElementById('x1');
+const y1in = document.getElementById('y1');
+const x2in = document.getElementById('x2');
+const y2in = document.getElementById('y2');
+const radiusRow = document.getElementById('radius-row');
+const radiusIn = document.getElementById('radius');
+
+let currentAlg = 'step';
+let smoothing = false;
+
+function toScreen(x,y){ return {x: centerX + x, y: centerY - y}; }
+function clearCanvas(){ ctx.clearRect(0,0,canvas.width,canvas.height); drawGrid(); drawAxes(); }
+
+function drawGrid(){
+  ctx.save();
+  ctx.strokeStyle='rgba(180,190,200,0.35)';
+  ctx.lineWidth=1;
+  for(let x=0;x<=canvas.width;x+=gridSize){
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke();
+  }
+  for(let y=0;y<=canvas.height;y+=gridSize){
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawAxes(){
+  ctx.save();
+  ctx.strokeStyle='#2c5282'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(0,centerY); ctx.lineTo(canvas.width,centerY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(centerX,0); ctx.lineTo(centerX,canvas.height); ctx.stroke();
+  ctx.restore();
+}
+
+function plotPixelInt(x,y,color='#0f3b6b',alpha=1){
+  const s = toScreen(x,y);
+  ctx.save();
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle=color;
+  const px = Math.floor(s.x/pixel)*pixel;
+  const py = Math.floor(s.y/pixel)*pixel;
+  ctx.fillRect(px,py,pixel,pixel);
+  ctx.restore();
+}
+
+function dda(x1,y1,x2,y2){
+  const pts=[];
+  const dx=x2-x1, dy=y2-y1;
+  const steps=Math.max(Math.abs(dx),Math.abs(dy));
+  let x=x1, y=y1;
+  const xi=dx/steps, yi=dy/steps;
+  for(let i=0;i<=steps;i++){ pts.push({x:Math.round(x),y:Math.round(y)}); x+=xi; y+=yi; }
+  return pts;
+}
+
+function bresLine(x1,y1,x2,y2){
+  const pts=[]; let x=x1,y=y1;
+  const dx=Math.abs(x2-x1), dy=Math.abs(y2-y1);
+  const sx=x1<x2?1:-1, sy=y1<y2?1:-1;
+  let err=dx-dy;
+  while(true){
+    pts.push({x,y});
+    if(x===x2&&y===y2)break;
+    const e2=2*err;
+    if(e2>-dy){ err-=dy; x+=sx; }
+    if(e2<dx){ err+=dx; y+=sy; }
+  }
+  return pts;
+}
+
+function stepAlg(x1,y1,x2,y2){
+  const pts=[];
+  const dx=x2-x1, dy=y2-y1;
+  if(Math.abs(dx)>=Math.abs(dy)){
+    const k=dy/dx, b=y1-k*x1, step=dx>0?1:-1;
+    for(let x=x1; step>0?x<=x2:x>=x2; x+=step){
+      pts.push({x, y:Math.round(k*x+b)});
+    }
+  } else {
+    const k=dx/dy, b=x1-k*y1, step=dy>0?1:-1;
+    for(let y=y1; step>0?y<=y2:y>=y2; y+=step){
+      pts.push({x:Math.round(k*y+b), y});
+    }
+  }
+  return pts;
+}
+
+function bresCircle(cx,cy,r){
+  const pts=[];
+  let x=0,y=r,d=3-2*r;
+  function add(xx,yy){
+    pts.push({x:cx+xx,y:cy+yy});
+    pts.push({x:cx-xx,y:cy+yy});
+    pts.push({x:cx+xx,y:cy-yy});
+    pts.push({x:cx-xx,y:cy-yy});
+    pts.push({x:cx+yy,y:cy+xx});
+    pts.push({x:cx-yy,y:cy+xx});
+    pts.push({x:cx+yy,y:cy-xx});
+    pts.push({x:cx-yy,y:cy-xx});
+  }
+  add(x,y);
+  while(y>=x){
+    x++;
+    if(d>0){ y--; d+=4*(x-y)+10; }
+    else d+=4*x+6;
+    add(x,y);
+  }
+  return [...new Set(pts.map(p=>p.x+","+p.y))].map(s=>{const[a,b]=s.split(',');return{x:+a,y:+b}});
+}
+
+function castle(x1,y1,x2,y2){ return bresLine(x1,y1,x2,y2); }
+
+// Wu
+function ip(x){return Math.floor(x)}
+function fp(x){return x-Math.floor(x)}
+function rp(x){return 1-fp(x)}
+function roundN(x){return Math.round(x)}
+
+function plotWu(x,y,a){ plotPixelInt(x,y,'#002b5c',a); }
+
+function wu(x0,y0,x1,y1){
+  let steep=Math.abs(y1-y0)>Math.abs(x1-x0);
+  if(steep){ [x0,y0]=[y0,x0]; [x1,y1]=[y1,x1]; }
+  if(x0>x1){ [x0,x1]=[x1,x0]; [y0,y1]=[y1,y0]; }
+  const dx=x1-x0, dy=y1-y0;
+  const grad = dx===0?0:dy/dx;
+
+  let xend=roundN(x0);
+  let yend=y0+grad*(xend-x0);
+  let xgap=rp(x0+0.5);
+  let xpxl1=xend, ypxl1=ip(yend);
+
+  if(steep){
+    plotWu(ypxl1,  xpxl1, rp(yend)*xgap);
+    plotWu(ypxl1+1,xpxl1, fp(yend)*xgap);
+  } else {
+    plotWu(xpxl1,ypxl1,  rp(yend)*xgap);
+    plotWu(xpxl1,ypxl1+1,fp(yend)*xgap);
+  }
+  let intery = yend+grad;
+
+  xend=roundN(x1);
+  yend=y1+grad*(xend-x1);
+  xgap=fp(x1+0.5);
+  let xpxl2=xend, ypxl2=ip(yend);
+
+  if(steep){
+    plotWu(ypxl2,  xpxl2, rp(yend)*xgap);
+    plotWu(ypxl2+1,xpxl2, fp(yend)*xgap);
+  } else {
+    plotWu(xpxl2,ypxl2,  rp(yend)*xgap);
+    plotWu(xpxl2,ypxl2+1,fp(yend)*xgap);
+  }
+
+  if(steep){
+    for(let x=xpxl1+1; x<xpxl2; x++){
+      plotWu(ip(intery),  x, rp(intery));
+      plotWu(ip(intery)+1,x, fp(intery));
+      intery+=grad;
+    }
+  } else {
+    for(let x=xpxl1+1; x<xpxl2; x++){
+      plotWu(x, ip(intery),  rp(intery));
+      plotWu(x, ip(intery)+1,fp(intery));
+      intery+=grad;
+    }
+  }
+}
+
+function circleAA(cx,cy,r){
+  for(let x=cx-r-2;x<=cx+r+2;x++){
+    for(let y=cy-r-2;y<=cy+r+2;y++){
+      const dist=Math.hypot(x-cx,y-cy);
+      const d=Math.abs(dist-r);
+      if(d<=1.5){
+        const a=1-(d/1.5);
+        plotPixelInt(x,y,'#002b5c',a);
+      }
+    }
+  }
+}
+
+function draw(){
+  clearCanvas();
+  const x1=parseInt(x1in.value), y1=parseInt(y1in.value);
+  const x2=parseInt(x2in.value), y2=parseInt(y2in.value);
+  const r=parseInt(radiusIn.value);
+
+  if(currentAlg==='bresenham-circle'){
+    if(smoothing) circleAA(x1,y1,r);
+    else bresCircle(x1,y1,r).forEach(p=>plotPixelInt(p.x,p.y));
+    return;
+  }
+  if(currentAlg==='wu'){ wu(x1,y1,x2,y2); return; }
+
+  if(smoothing){ wu(x1,y1,x2,y2); return; }
+
+  let pts=[];
+  switch(currentAlg){
+    case 'step': pts=stepAlg(x1,y1,x2,y2); break;
+    case 'dda': pts=dda(x1,y1,x2,y2); break;
+    case 'bresenham-line': pts=bresLine(x1,y1,x2,y2); break;
+    case 'castle-pitway': pts=castle(x1,y1,x2,y2); break;
+  }
+  pts.forEach(p=>plotPixelInt(p.x,p.y));
+}
+
+algButtons.forEach(b=>b.addEventListener('click',()=>{
+  algButtons.forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  currentAlg=b.dataset.alg;
+  radiusRow.style.display = currentAlg==='bresenham-circle'?'block':'none';
+}));
+
+smoothingToggle.addEventListener('click',()=>{
+  smoothing=!smoothing;
+  smoothingToggle.textContent=smoothing?'ON':'OFF';
+});
+
+drawBtn.addEventListener('click',draw);
+clearBtn.addEventListener('click',clearCanvas);
+
+clearCanvas();
+</script>
+</body>
+</html>
